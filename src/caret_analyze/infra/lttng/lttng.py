@@ -366,45 +366,64 @@ class Lttng(InfraBase):
         begin: int
         end: int
 
+        traceInst = []
+
         if event_filters:
             for f in event_filters:
                 f.reset()
 
         # TODO(hsgwa): Same implementation duplicated. Refactoring required.
         if isinstance(trace_dir_or_events, str):
-            event_collection = EventCollection(
-                trace_dir_or_events, force_conversion)
-            print('{} events found.'.format(len(event_collection)))
 
+            traceInst = trace_dir_or_events.split(',')
             common = LttngEventFilter.Common()
-            begin, end = event_collection.time_range()
-            common.start_time, common.end_time = begin, end
+            begin = 0
+            end = 0
 
-            # Offset is obtained for conversion from the monotonic clock time to the system time.
-            for event in event_collection:
-                event_name = event[LttngEventFilter.NAME]
-                if event_name == 'ros2_caret:caret_init':
-                    offset = Ros2Handler.get_monotonic_to_system_offset(event)
-                    break
-
-            handler = Ros2Handler(data, offset)
+# Offset is obtained for conversion from the monotonic clock time to the system time.
 
             init_events = []
             run_events = []
             filtered_event_count = 0
 
+
+            for trace_dir in traceInst:
+                print('Processing trace folder : {}'.format(trace_dir))
+                event_collection = EventCollection(trace_dir.strip(), force_conversion)
+                print('{} events found.'.format(len(event_collection)))
+                tempBegin, tempEnd = event_collection.time_range()
+                if begin == 0 or end == 0:
+                    begin = tempBegin
+                    end = tempEnd
+                else :
+                    if tempBegin > begin :
+                        begin = tempBegin
+                    if tempEnd < end:
+                        end =  tempEnd
+                for event in event_collection:
+                    event_name = event[LttngEventFilter.NAME]
+                    if event_name == 'ros2_caret:caret_init':
+                        offset = Ros2Handler.get_monotonic_to_system_offset(event)
+                        break
+
+                handler = Ros2Handler(data, offset)
+
+                init_event_names = set(Lttng._prioritized_init_events)
+                for event in event_collection:
+                    event_name = event[LttngEventFilter.NAME]
+                    if len(event_filters) > 0 and \
+                            any(not f.accept(event, common) for f in event_filters):
+                        continue
+                    if event_name in init_event_names:
+                        init_events.append(event)
+                    else:
+                        run_events.append(event)
+                    filtered_event_count += 1
+
+                
+            common.start_time, common.end_time = begin, end
+
             # distribute all trace events to init_events and run_events
-            init_event_names = set(Lttng._prioritized_init_events)
-            for event in event_collection:
-                event_name = event[LttngEventFilter.NAME]
-                if len(event_filters) > 0 and \
-                        any(not f.accept(event, common) for f in event_filters):
-                    continue
-                if event_name in init_event_names:
-                    init_events.append(event)
-                else:
-                    run_events.append(event)
-                filtered_event_count += 1
 
             Lttng.apply_init_timestamp(init_events, offset)
 
