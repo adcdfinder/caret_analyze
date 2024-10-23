@@ -306,47 +306,64 @@ class Lttng(InfraBase):
 
         data = Ros2DataModel()
         offset: int | None = None
+
+
+        traceInst = []
         events = []
         begin: int
         end: int
 
         # TODO(hsgwa): Same implementation duplicated. Refactoring required.
         if isinstance(trace_dir_or_events, str):
-            event_collection = EventCollection(
-                trace_dir_or_events, force_conversion)
-            print('{} events found.'.format(len(event_collection)))
+            traceInst = trace_dir_or_events.split(',')
+            begin = 0
+            end = 0
 
-            common = LttngEventFilter.Common()
-            begin, end = event_collection.time_range()
-            common.start_time, common.end_time = begin, end
+            for trace_dir in traceInst:
+                print('Processing trace folder : {}'.format(trace_dir))
+                event_collection = EventCollection(trace_dir.strip(), force_conversion)
+                print('{} events found.'.format(len(event_collection)))
+                tempBegin, tempEnd = event_collection.time_range()
+                
+                handler = Ros2Handler(data, offset)
+                
+                if begin == 0 or end == 0:
+                    begin = tempBegin
+                    end = tempEnd
+                else :
+                    if tempBegin > begin :
+                        begin = tempBegin
+                    if tempEnd < end:
+                        end =  tempEnd
+                for event in event_collection:
+                    event_name = event[LttngEventFilter.NAME]
+                    if event_name == 'ros2_caret:caret_init':
+                        offset = Ros2Handler.get_monotonic_to_system_offset(event)
+                        break
 
-            # Offset is obtained for conversion from the monotonic clock time to the system time.
-            for event in event_collection:
-                event_name = event[LttngEventFilter.NAME]
-                if event_name == 'ros2_caret:caret_init':
-                    offset = Ros2Handler.get_monotonic_to_system_offset(event)
-                    break
+                common = LttngEventFilter.Common()
+                begin, end = event_collection.time_range()
+                common.start_time, common.end_time = begin, end
 
-            handler = Ros2Handler(data, offset)
-
-            filtered_event_count = 0
-            for event in tqdm(
-                    iter(event_collection),
-                    total=len(event_collection),
-                    desc='loading',
-                    mininterval=1.0):
-                if len(event_filters) > 0 and \
-                        any(not f.accept(event, common) for f in event_filters):
-                    continue
-                if store_events:
-                    event_dict = {
-                        k: get_field(event, k) for k in event
-                    }
-                    events.append(event_dict)
-                filtered_event_count += 1
-                event_name = event[LttngEventFilter.NAME]
-                handler_ = handler.handler_map[event_name]
-                handler_(event)
+                # Offset is obtained for conversion from the monotonic clock time to the system time.
+                filtered_event_count = 0
+                for event in tqdm(
+                        iter(event_collection),
+                        total=len(event_collection),
+                        desc='loading',
+                        mininterval=1.0):
+                    if len(event_filters) > 0 and \
+                            any(not f.accept(event, common) for f in event_filters):
+                        continue
+                    if store_events:
+                        event_dict = {
+                            k: get_field(event, k) for k in event
+                        }
+                        events.append(event_dict)
+                    filtered_event_count += 1
+                    event_name = event[LttngEventFilter.NAME]
+                    handler_ = handler.handler_map[event_name]
+                    handler_(event)
 
             data.finalize()
             if len(event_filters) > 0:
